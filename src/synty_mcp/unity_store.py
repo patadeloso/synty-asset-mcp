@@ -18,6 +18,7 @@ from .db import StateDB
 from .write_lock import library_write_lock
 
 MAX_DEPTH = 32
+WINDOWS_UNSUPPORTED = "Unity Asset Store cache ingestion is not currently supported on Windows."
 
 
 def _ref_key(settings: Settings) -> bytes:
@@ -51,7 +52,7 @@ def _file_id(path: Path):
 
 
 def _overlap(a: Path, b: Path) -> bool:
-    # Also catch aliases on case-insensitive volumes without assuming every volume is one.
+    # AI: Also catch aliases on case-insensitive volumes without assuming every volume is one.
     if a.is_relative_to(b) or b.is_relative_to(a):
         return True
     aid, bid = _file_id(a), _file_id(b)
@@ -88,10 +89,13 @@ class UnityStore:
     def __init__(self, settings: Settings, db: StateDB):
         self.settings = settings
         self.db = db
-        self._key = _ref_key(settings) if settings.unity_asset_store_enabled else None
+        self._key = _ref_key(settings) if settings.unity_asset_store_enabled and settings.unity_cache_supported else None
 
     def status(self) -> dict:
         settings = self.settings
+        if not settings.unity_cache_supported:
+            return {"enabled": settings.unity_asset_store_enabled, "available": False, "reason": WINDOWS_UNSUPPORTED,
+                    "roots": [{"root": n, "status": "unsupported"} for n in range(1, len(settings.unity_asset_store_roots) + 1)]}
         guarded = [settings.data_dir, settings.state_db, *settings.write_roots, *settings.source_roots]
         roots = []
         for n, root in enumerate(settings.unity_asset_store_roots, 1):
@@ -146,7 +150,7 @@ class UnityStore:
         report = {**self.status(), "truncated": False}
         if not report["available"]:
             return report, []
-        if self._key is None:  # settings enabled after service construction
+        if self._key is None:  # AI: settings enabled after service construction
             self._key = _ref_key(self.settings)
         known = defaultdict(list)
         for row in self.db.q("SELECT slug, pack_id FROM packs"):
@@ -177,8 +181,10 @@ class UnityStore:
 
     def import_package(self, ref: str, *, allow_path: bool = False, allow_tree_update: bool = False,
                        retry: bool = False) -> dict:
-        # Never open a caller-supplied path. The local CLI may select by a discovered path;
+        # AI: Never open a caller-supplied path. The local CLI may select by a discovered path;
         # an MCP client needs the opaque capability from a scan or handed to it by the owner.
+        if not self.settings.unity_cache_supported:
+            return {"status": "failed", "error": WINDOWS_UNSUPPORTED}
         if not allow_path and not re.fullmatch("[a-f0-9]{64}", ref):
             raise ValueError("expected a Unity cache scan ID")
         if not self.settings.unity_asset_store_enabled:
@@ -191,11 +197,11 @@ class UnityStore:
         raise ValueError("package not discovered; scan configured Unity cache roots again")
 
     def sync(self, *, agent: bool = False) -> dict:
-        if not self.settings.unity_asset_store_enabled:
+        if not self.settings.unity_cache_supported or not self.settings.unity_asset_store_enabled:
             return {**self.status(), "items": [], "truncated": False, "hidden_count": 0}
         with library_write_lock(self.settings):
             report, items = self._discover()
-            # Never act on an incomplete preview. A second exact candidate in another
+            # AI: Never act on an incomplete preview. A second exact candidate in another
             # publisher's folder also requires the owner to choose which one to import.
             if report["truncated"]:
                 return {**report, "items": [], "error": "scan limit reached; narrow the configured roots"}
@@ -214,7 +220,7 @@ class UnityStore:
 
     @staticmethod
     def _snapshot(item: Item, dest: Path) -> None:
-        # Do not stream until EOF: even a file growing concurrently cannot exceed the preflight size.
+        # AI: Do not stream until EOF: even a file growing concurrently cannot exceed the preflight size.
         def unchanged(st):
             return (stat.S_ISREG(st.st_mode) and os.path.samestat(st, item.stat)
                     and st.st_size == item.stat.st_size and st.st_mtime_ns == item.stat.st_mtime_ns)

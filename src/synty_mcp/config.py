@@ -68,7 +68,7 @@ class Settings:
     # Optional providers
     unity_asset_store_enabled: bool = False
     unity_asset_store_roots: list[Path] = field(default_factory=list)
-    unity_asset_store_show_unmatched: bool = False  # owner opt-in for MCP inventory disclosure
+    unity_asset_store_show_unmatched: bool = False  # AI: owner opt-in for MCP inventory disclosure
     unity_asset_store_max_package_bytes: int = 8 * 1024**3
     unity_asset_store_max_scan_entries: int = 50_000
     syntydex_enabled: bool = False
@@ -106,11 +106,18 @@ class Settings:
             value = getattr(self, key)
             if type(value) is not int or value <= 0:
                 raise ValueError(f"{key} must be a positive integer")
-        self.unity_asset_store_roots = [Path(p).expanduser().resolve() for p in self.unity_asset_store_roots]
+        self.unity_asset_store_roots = [
+            Path(p).expanduser().resolve() if self.unity_cache_supported else Path(p)
+            for p in self.unity_asset_store_roots
+        ]
         if self.owned_packs_file:
             self.owned_packs_file = Path(self.owned_packs_file).expanduser().resolve()
         if self.syntydex_export_file:
             self.syntydex_export_file = Path(self.syntydex_export_file).expanduser().resolve()
+
+    @property
+    def unity_cache_supported(self) -> bool:
+        return os.name != "nt"
 
     # Roots ---------------------------------------------------------------
     @property
@@ -230,7 +237,7 @@ def load_settings(config_file: str | Path | None = None, **overrides) -> Setting
         if k.endswith(("_dir", "_db", "_file")) and isinstance(v, str) and not Path(v).expanduser().is_absolute():
             v = str((base / v).resolve())
         if k in ("export_roots", "source_roots", "unity_asset_store_roots") and isinstance(v, list):
-            v = [str((base / x).resolve()) if not Path(x).expanduser().is_absolute() else x for x in v]
+            v = [str(base / x) if not Path(x).expanduser().is_absolute() else x for x in v]
         cfg[k] = v
 
     probe = Settings(data_dir=cfg.get("data_dir") or overrides.get("data_dir") or "./data")

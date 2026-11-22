@@ -51,6 +51,7 @@ def test_mcp_in_process_tools(indexed_pack):
     asyncio.run(go())
 
 
+@pytest.mark.skipif(sys.platform == "win32", reason="Unity cache ingestion is unsupported on native Windows")
 def test_unity_cache_tools(svc, tmp_path, monkeypatch):
     import re
 
@@ -62,8 +63,8 @@ def test_unity_cache_tools(svc, tmp_path, monkeypatch):
 
     root = tmp_path / "private-cache-name"
     fixtures.build_unitypackage(root / "POLYGON_FakeVillage.unitypackage")
-    fixtures.build_unitypackage(root / "SecretOtherProduct.unitypackage")  # matches no owned pack
-    _register_fake_pack(svc)  # the exact pack the first file belongs to
+    fixtures.build_unitypackage(root / "SecretOtherProduct.unitypackage")  # AI: matches no owned pack
+    _register_fake_pack(svc)  # AI: the exact pack the first file belongs to
     svc.settings.unity_asset_store_enabled = True
     svc.settings.unity_asset_store_roots = [root]
 
@@ -76,7 +77,7 @@ def test_unity_cache_tools(svc, tmp_path, monkeypatch):
 
     async def go():
         async with Client(build_server(svc)) as c:
-            # Status is a root summary and must not walk the cache.
+            # AI: Status is a root summary and must not walk the cache.
             with monkeypatch.context() as m:
                 def no_scan(*_a, **_k):
                     raise AssertionError("status must not scan")
@@ -87,20 +88,20 @@ def test_unity_cache_tools(svc, tmp_path, monkeypatch):
             assert status["available"] and "items" not in status
             assert not private(status) and ".unitypackage" not in str(status)
 
-            # Agent scans are privacy-filtered: unmatched files stay hidden by default.
+            # AI: Agent scans are privacy-filtered: unmatched files stay hidden by default.
             scan = _payload(await c.call_tool("scan_unity_asset_store", {}))
             assert not private(scan) and "SecretOtherProduct" not in str(scan)
             item = matched(scan)
             assert re.fullmatch(r"[0-9a-f]{64}", item["id"])
 
-            # Anything but an exact scan ID is refused before a job exists; paths are never accepted.
+            # AI: Anything but an exact scan ID is refused before a job exists; paths are never accepted.
             for bad in (str(root / "POLYGON_FakeVillage.unitypackage"), item["id"].upper(), item["id"][:-1],
                         item["id"] + "\n", item["id"] + "0", ""):
                 res = await c.call_tool("import_unity_asset_store_package", {"ref": bad, "wait": True})
                 assert res.is_error and not private(res.content[0].text), bad
             assert svc.jobs.list() == []
 
-            # Writes are jobs: not waited for by default, then read back with get_job.
+            # AI: Writes are jobs: not waited for by default, then read back with get_job.
             job = _payload(await c.call_tool("import_unity_asset_store_package", {"ref": item["id"]}))
             assert job["kind"] == "unity_cache_import" and job["status"] in ("queued", "running", "done")
             assert job["params"] == {"ref": item["id"]}
@@ -121,7 +122,7 @@ def test_unity_cache_tools(svc, tmp_path, monkeypatch):
             assert matched(synced["result"])["status"] == "already_imported"
             assert not private(synced) and "SecretOtherProduct" not in str(synced)
 
-            # The owner may opt in to showing unmatched filenames; root paths stay hidden regardless.
+            # AI: The owner may opt in to showing unmatched filenames; root paths stay hidden regardless.
             svc.settings.unity_asset_store_show_unmatched = True
             shown = _payload(await c.call_tool("scan_unity_asset_store", {}))
             assert "SecretOtherProduct" in str(shown) and not private(shown)
@@ -165,7 +166,7 @@ def test_unity_cache_errors_never_leak(svc, tmp_path, monkeypatch):
                 listed = _payload(await c.call_tool("list_jobs", {}))
                 for seen in (job, logged, listed):
                     assert "private-account-name" not in str(seen) and "Traceback" not in str(seen)
-            # Agents can neither pass a path nor confirm a tree update, and never set retry.
+            # AI: Agents can neither pass a path nor confirm a tree update, and never set retry.
             assert calls[-2] == ((ref,), {"allow_path": False, "allow_tree_update": False})
             assert calls[-1] == ((), {"agent": True})
 
@@ -216,6 +217,7 @@ def test_http_requires_token(http):
     assert ok.status_code == 200 and ok.json()["packs_owned"] == 12
 
 
+@pytest.mark.skipif(sys.platform == "win32", reason="Unity cache ingestion is unsupported on native Windows")
 def test_http_unity_cache_status_hides_root_paths(http, svc, tmp_path):
     root = tmp_path / "private-account-name" / "cache"
     root.mkdir(parents=True)

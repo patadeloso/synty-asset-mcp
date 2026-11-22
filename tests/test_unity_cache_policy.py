@@ -11,6 +11,8 @@ from conftest import _register_fake_pack
 from synty_mcp.config import load_settings
 from synty_mcp.service import Service
 
+pytestmark = pytest.mark.skipif(os.name == "nt", reason="Unity cache ingestion is unsupported on native Windows")
+
 
 @pytest.fixture
 def store(svc, tmp_path):
@@ -58,7 +60,7 @@ def test_sync_does_not_mix_trees_and_confirmation_is_explicit(store):
     provider, root = store
     pkg = fixtures.build_unitypackage(root / "POLYGON_FakeVillage.unitypackage")
     assert provider.sync()["items"][0]["status"] == "imported"
-    # Same pack, different valid archive bytes. A shared tree already exists.
+    # AI: Same pack, different valid archive bytes. A shared tree already exists.
     fixtures.build_unitypackage(pkg, previews=False)
     tree = provider.settings.library_dir / "polygon-fakevillage" / "unity"
     before = {p: p.stat().st_mtime_ns for p in tree.rglob("*") if p.is_file()}

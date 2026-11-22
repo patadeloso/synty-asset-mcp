@@ -17,7 +17,8 @@ jobs:
       - run: ruff check src tests scripts configs
       - run: pytest   # Blender-backed tests skip without SYNTY_MCP_BLENDER
 
-  windows-cache:
+  windows-cache-unsupported:
+    name: Windows unsupported-platform guard
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
@@ -25,4 +26,4 @@ jobs:
         with:
           python-version: "3.12"
       - run: python -m pip install -e ".[dev]"
-      - run: python -m pytest tests/test_library_hardening.py tests/test_unity_cache_policy.py
+      - run: python -m pytest tests/test_unity_windows_unsupported.py

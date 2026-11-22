@@ -2,6 +2,8 @@
 
 Download the package yourself in the Unity Editor (**Package Manager → My Assets**). The provider reads local files; it never logs in to Unity or contacts a store.
 
+**Platform support:** Native Windows is not currently supported. Setting `unity_asset_store_enabled: true` does not enable cache discovery or import on Windows. This restriction applies to the Unity cache provider, not to manual archive imports.
+
 ## Preview, then import
 
 1. Add the following to your local `config.yaml`. Use the actual cache folder (or, better, just the publisher subfolder you want to import). Don't use a home directory, Unity project, managed data directory or configured source root.

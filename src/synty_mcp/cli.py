@@ -72,7 +72,7 @@ def cmd_import(args) -> int:
     return 0
 
 
-# Result statuses that make `unity-cache import|scan|sync` exit non-zero.
+# AI: Result statuses that make `unity-cache import|scan|sync` exit non-zero.
 UNITY_CACHE_FAILURES = frozenset({"failed", "failed_unchanged", "requires_tree_confirmation"})
 
 
@@ -80,7 +80,7 @@ def cmd_unity_cache(args) -> int:
     svc = _svc(args)
     store = svc.unity_store
     if args.action == "import":
-        # Only the owner at the CLI may name a cache file by path or confirm a tree update.
+        # AI: Only the owner at the CLI may name a cache file by path or confirm a tree update.
         try:
             result = store.import_package(str(Path(args.ref).expanduser().absolute())
                                           if Path(args.ref).suffix.lower() == ".unitypackage" else args.ref,
@@ -91,12 +91,12 @@ def cmd_unity_cache(args) -> int:
         _print(result)
         return int(result.get("status") in UNITY_CACHE_FAILURES)
     if args.action == "status":
-        result = store.status()  # root summary only: no scan, no files
+        result = store.status()  # AI: root summary only: no scan, no files
     elif args.action == "sync":
         result = store.sync(agent=False)
     else:
         result = store.scan(agent=False)
-    # Paths are shown only to the owner at the CLI, not in MCP/HTTP responses.
+    # AI: Paths are shown only to the owner at the CLI, not in MCP/HTTP responses.
     roots = result.get("roots") or []
     if len(roots) == len(svc.settings.unity_asset_store_roots):
         for root, path in zip(roots, svc.settings.unity_asset_store_roots, strict=True):

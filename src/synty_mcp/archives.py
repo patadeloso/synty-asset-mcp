@@ -69,7 +69,7 @@ def verify_archive(path: Path, *, max_bytes: int | None = None, max_files: int |
                         if fh is not None:
                             while fh.read(CHUNK):
                                 pass
-                # tar EOF can precede gzip EOF: read through the footer so gzip checks its CRC.
+                # AI: tar EOF can precede gzip EOF: read through the footer so gzip checks its CRC.
                 while chunk := gz.read(CHUNK):
                     size += len(chunk)
                     if max_bytes is not None and size > max_bytes:

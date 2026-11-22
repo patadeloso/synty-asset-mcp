@@ -14,7 +14,7 @@ from synty_mcp.write_lock import LibraryWriteLockTimeout, library_write_lock
 
 
 def test_shared_lock_reentry_and_process_exit(settings):
-    # Use the same Python installation as pytest. No platform-specific lock utilities.
+    # AI: Use the same Python installation as pytest. No platform-specific lock utilities.
     child = """
 import sys
 from pathlib import Path
@@ -65,7 +65,7 @@ def test_tree_guard_also_checks_archive_dedup_hits(svc):
 
 def test_strict_verification_checks_gzip_footer_and_legacy_dedup(svc):
     pkg = fixtures.build_unitypackage(svc.settings.inbox_dir / "POLYGON_NewExample.unitypackage")
-    pkg.write_bytes(pkg.read_bytes()[:-4])  # tar end marker is intact, gzip footer is not
+    pkg.write_bytes(pkg.read_bytes()[:-4])  # AI: tar end marker is intact, gzip footer is not
     with pytest.raises(library.InvalidArchive):
         library.import_archive(svc.settings, svc.db, pkg, require_valid=True)
     assert not svc.db.one("SELECT slug FROM packs WHERE slug='polygon-newexample'")
@@ -76,7 +76,7 @@ def test_strict_verification_checks_gzip_footer_and_legacy_dedup(svc):
 
 
 def test_staged_windows_copy_stays_readonly_after_cleanup(svc, monkeypatch):
-    # Exercise the policy even on Linux/macOS; CI also runs it on Windows.
+    # AI: Check the archive-layer safeguard independently of platform support for the cache provider.
     monkeypatch.setattr(library, "_WINDOWS", True)
     stage = svc.settings.tmp_dir / "staging"
     pkg = fixtures.build_unitypackage(stage / "POLYGON_NewExample.unitypackage")

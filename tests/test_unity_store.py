@@ -13,6 +13,8 @@ from synty_mcp.cli import main
 from synty_mcp.config import load_settings
 from synty_mcp.service import Service
 
+pytestmark = pytest.mark.skipif(os.name == "nt", reason="Unity cache ingestion is unsupported on native Windows")
+
 
 @pytest.fixture
 def cache(tmp_path):
@@ -63,7 +65,7 @@ def test_sync_is_offline_idempotent_and_preserves_cache(cache, monkeypatch):
     original = pkg.stat()
     other = root / "other.unitypackage"
     shutil.copyfile(pkg, other)
-    svc.settings.unity_asset_store_roots.append(pkg.parent)  # overlapping roots, single discovery
+    svc.settings.unity_asset_store_roots.append(pkg.parent)  # AI: overlapping roots, single discovery
 
     def forbid(*args, **kwargs):
         pytest.fail("local cache provider attempted network access")
@@ -79,7 +81,7 @@ def test_sync_is_offline_idempotent_and_preserves_cache(cache, monkeypatch):
     assert not os.path.samefile(pkg, arc["path"])
     assert (pkg.stat().st_mode, pkg.stat().st_mtime_ns) == (original.st_mode, original.st_mtime_ns)
 
-    # Explicit selection may import an unmatched file. SHA deduplication remains authoritative.
+    # AI: Explicit selection may import an unmatched file. SHA deduplication remains authoritative.
     assert svc.unity_store.import_package(str(other), allow_path=True)["archive_id"] == arc["id"]
     assert {i["status"] for i in svc.unity_store.sync()["items"]} == {"already_imported"}
     ref = next(i["id"] for i in synced if i["filename"] == pkg.name)

@@ -17,7 +17,7 @@ from .write_lock import library_writer
 
 ARCHIVE_SUFFIXES = (".zip", ".unitypackage")
 UNITY_TREE_DIRS = ("unity", "unity_previews")
-# Module-level so tests can exercise the Windows staging rule on any platform.
+# AI: Module-level so tests can exercise the Windows staging rule on any platform.
 _WINDOWS = os.name == "nt"
 
 

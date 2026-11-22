@@ -10,7 +10,7 @@ from pathlib import Path
 
 from .config import Settings
 
-DEFAULT_TIMEOUT_S = 3600  # a different process may be importing a large pack
+DEFAULT_TIMEOUT_S = 3600  # AI: a different process may be importing a large pack
 _held = threading.local()
 
 

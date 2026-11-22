@@ -3,6 +3,8 @@
 Tracking: [issue #1](https://github.com/patadeloso/synty-asset-mcp/issues/1). For the implemented commands,
 configuration, and a worked example, see [Local Unity cache ingestion](../examples/unity-cache.md).
 
+**Platform scope:** Native Windows support for the Unity cache provider is out of scope for this release.
+
 ## Goal
 
 Support Synty packages that the owner purchased through the **Unity Asset Store** without automating Unity authentication or relying on undocumented Unity download APIs.

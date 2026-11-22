@@ -109,7 +109,7 @@ CREATE TABLE IF NOT EXISTS jobs(
   finished_at REAL
 );
 CREATE INDEX IF NOT EXISTS idx_jobs_dedupe ON jobs(dedupe_key, status);
--- Only completed cache imports are persisted; discovery is a live, read-only scan.
+-- AI: Track completed imports and verification failures; discovery itself is read-only.
 CREATE TABLE IF NOT EXISTS unity_store_imports(
   source_path TEXT PRIMARY KEY,
   size_bytes INTEGER NOT NULL,

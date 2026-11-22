@@ -627,8 +627,8 @@ class Service:
             ]
         return res
 
-    # ------------------------------------------------- unity cache (agent side)
-    # Agent-facing wrappers: no caller-supplied paths, privacy-filtered results (agent=True), and
+    # AI: Unity cache (agent side)
+    # AI: Agent-facing wrappers: no caller-supplied paths, privacy-filtered results (agent=True), and
     # provider exceptions reduced to their type name so no local path, raw message or traceback can
     # reach a tool response, a job record or a job log.
     def unity_asset_store_status(self) -> dict:
@@ -645,13 +645,13 @@ class Service:
             raise ServiceError(_unity_failure("scan", exc)) from None
 
     def import_unity_asset_store_package(self, ref: str, wait: bool = False, timeout: float = 1800) -> dict:
-        # Checked before any job is submitted; the rejected value is not echoed back.
+        # AI: Checked before any job is submitted; the rejected value is not echoed back.
         if not isinstance(ref, str) or not _UNITY_REF.fullmatch(ref):
             raise ServiceError("ref must be a package ID from scan_unity_asset_store "
                                "(exactly 64 lowercase hexadecimal characters)")
 
         def work(_ctx):
-            # Nothing may escape this callback: the job runner stores str(exc) and the traceback.
+            # AI: Nothing may escape this callback: the job runner stores str(exc) and the traceback.
             try:
                 return _json_safe(self.unity_store.import_package(ref, allow_path=False, allow_tree_update=False))
             except Exception as exc:  # noqa: BLE001 - sanitized
@@ -688,7 +688,7 @@ class Service:
         return {"jobs": self.jobs.list(status, limit)}
 
 
-_UNITY_REF = re.compile(r"[0-9a-f]{64}")  # used with fullmatch: no trailing newline, no upper case
+_UNITY_REF = re.compile(r"[0-9a-f]{64}")  # AI: used with fullmatch: no trailing newline, no upper case
 
 
 def _unity_failure(action: str, exc: BaseException) -> str:
