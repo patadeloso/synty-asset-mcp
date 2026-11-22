@@ -73,6 +73,10 @@ config and register it **read-only**, without copying it:
 synty-mcp scan --register /path/to/project/Source_Files
 ```
 
+Purchased through Unity instead? Download the package in the Editor's **Package Manager → My Assets**, then
+[configure and preview the local Unity cache](examples/unity-cache.md). `synty-mcp unity-cache scan`
+never imports anything; `import` and `sync` work offline and leave Unity's cache untouched.
+
 ### Command line
 
 ```bash

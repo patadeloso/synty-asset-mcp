@@ -34,6 +34,8 @@ max_extract_bytes: 42949672960   # 40 GiB
 max_extract_files: 400000
 
 # Optional providers (off by default; see docs/INTEGRATIONS.md)
+unity_asset_store_enabled: false
+unity_asset_store_roots: []      # folders containing downloaded .unitypackage files; no default location
 syntydex_enabled: false
 syntydex_export_file: null       # one asset name per line, optionally "Name<TAB>Pack"
 store_enabled: false
