@@ -13,6 +13,7 @@ import shutil
 import stat
 import tarfile
 import zipfile
+import zlib
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -41,29 +42,41 @@ def sha256_file(path: Path, progress=None) -> str:
     return h.hexdigest()
 
 
-def verify_archive(path: Path) -> tuple[bool, str]:
+def verify_archive(path: Path, *, max_bytes: int | None = None, max_files: int | None = None) -> tuple[bool, str]:
     """Full read with CRC / gzip checks. Streams; never loads the archive in memory."""
     low = path.name.lower()
     try:
         if low.endswith(".zip"):
             with zipfile.ZipFile(path) as zf:
+                entries = zf.infolist()
+                if ((max_files is not None and len(entries) > max_files) or
+                        (max_bytes is not None and sum(m.file_size for m in entries) > max_bytes)):
+                    return False, "archive exceeds verification limits"
                 bad = zf.testzip()
                 if bad:
                     return False, f"CRC mismatch in member {bad}"
                 return True, f"zip ok ({len(zf.infolist())} members)"
         if low.endswith(".unitypackage") or low.endswith((".tar.gz", ".tgz")):
-            n = 0
+            n = size = 0
             with gzip.open(path, "rb") as gz, tarfile.open(fileobj=gz, mode="r|") as tar:
                 for m in tar:
                     n += 1
+                    size += m.size
+                    if (max_files is not None and n > max_files) or (max_bytes is not None and size > max_bytes):
+                        return False, "archive exceeds verification limits"
                     if m.isfile():
                         fh = tar.extractfile(m)
                         if fh is not None:
                             while fh.read(CHUNK):
                                 pass
+                # tar EOF can precede gzip EOF: read through the footer so gzip checks its CRC.
+                while chunk := gz.read(CHUNK):
+                    size += len(chunk)
+                    if max_bytes is not None and size > max_bytes:
+                        return False, "archive exceeds verification limits"
             return True, f"tar.gz ok ({n} members)"
         return False, "unsupported archive type"
-    except (zipfile.BadZipFile, tarfile.TarError, OSError, EOFError) as exc:
+    except (zipfile.BadZipFile, tarfile.TarError, OSError, EOFError, zlib.error) as exc:
         return False, f"{type(exc).__name__}: {exc}"
 
 

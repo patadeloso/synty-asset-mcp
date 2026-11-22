@@ -6,26 +6,45 @@ from __future__ import annotations
 import os
 import re
 import shutil
+import stat
 from pathlib import Path
 
 from . import archives, packs
 from .config import Settings
 from .db import StateDB, now
-from .safepaths import confine, safe_name
+from .safepaths import confine, is_within, safe_name
+from .write_lock import library_writer
 
 ARCHIVE_SUFFIXES = (".zip", ".unitypackage")
+UNITY_TREE_DIRS = ("unity", "unity_previews")
+# Module-level so tests can exercise the Windows staging rule on any platform.
+_WINDOWS = os.name == "nt"
 
 
-def _link_or_copy(src: Path, dst: Path) -> str:
+class InvalidArchive(ValueError):
+    """``require_valid`` import of an archive that fails its integrity check."""
+
+
+class TreeConflict(RuntimeError):
+    """``protect_unity_tree`` import whose pack already has ``unity/`` or
+    ``unity_previews/`` content that this archive does not own."""
+
+
+def _link_or_copy(src: Path, dst: Path, *, hardlink: bool = True) -> str:
     """Store an immutable copy of the original. Hard link when on the same
-    filesystem (zero extra space), else a streamed copy."""
+    filesystem (zero extra space), else a streamed copy. ``hardlink=False``
+    forces the copy so ``dst`` never shares an inode with ``src``."""
     dst.parent.mkdir(parents=True, exist_ok=True)
     if dst.exists():
         return "exists"
-    try:
-        os.link(src, dst)
-        mode = "hardlink"
-    except OSError:
+    mode = None
+    if hardlink:
+        try:
+            os.link(src, dst)
+            mode = "hardlink"
+        except OSError:
+            pass
+    if mode is None:
         tmp = dst.with_name(dst.name + ".part")
         shutil.copyfile(src, tmp)
         tmp.replace(dst)
@@ -37,6 +56,48 @@ def _link_or_copy(src: Path, dst: Path) -> str:
     return mode
 
 
+def _staged_on_windows(settings: Settings, path: Path, origin: str) -> bool:
+    """On Windows the read-only attribute is shared by every hard link. A staged
+    temp file linked into the archive store would become read-only (breaking
+    temp cleanup), and cleanup that clears the attribute to delete it would
+    silently make the stored archive writable. Such files are copied instead."""
+    return _WINDOWS and (origin == "unity_cache" or is_within(path, settings.tmp_dir))
+
+
+def _populated(directory: Path, slug: str) -> bool:
+    """True when ``directory`` holds anything. Anything that cannot be inspected,
+    or is not a real directory, is a conflict rather than "empty"."""
+    try:
+        st = os.lstat(directory)
+    except FileNotFoundError:
+        return False
+    except OSError as exc:
+        raise TreeConflict(f"pack {slug!r}: cannot inspect {directory.name}/ ({type(exc).__name__})") from None
+    if not stat.S_ISDIR(st.st_mode):
+        return True
+    try:
+        with os.scandir(directory) as entries:
+            return next(entries, None) is not None
+    except OSError as exc:
+        raise TreeConflict(f"pack {slug!r}: cannot inspect {directory.name}/ ({type(exc).__name__})") from None
+
+
+def _guard_unity_tree(settings: Settings, db: StateDB, slug: str, archive_id: int | None) -> None:
+    """Refuse when the pack's Unity tree already holds content that
+    ``archive_id`` (None = an archive not yet registered) does not own."""
+    pack_dir = settings.library_dir / slug
+    populated = [name for name in UNITY_TREE_DIRS if _populated(pack_dir / name, slug)]
+    if not populated:
+        return
+    unity_dest = pack_dir / "unity"
+    owner = db.one("SELECT archive_id FROM trees WHERE pack_slug=? AND kind='unity' AND path=?",
+                   (slug, str(unity_dest)))
+    if archive_id is not None and owner and owner["archive_id"] == archive_id:
+        return
+    raise TreeConflict("an existing Unity tree requires owner confirmation")
+
+
+@library_writer
 def import_archive(
     settings: Settings,
     db: StateDB,
@@ -47,15 +108,35 @@ def import_archive(
     verify: bool = True,
     progress=None,
     log=print,
+    require_valid: bool = False,
+    protect_unity_tree: bool = False,
 ) -> dict:
-    """Register one archive. Idempotent: the same bytes are never stored twice."""
+    """Register one archive. Idempotent: the same bytes are never stored twice.
+
+    ``require_valid``: verify before anything is registered or copied and raise
+    :class:`InvalidArchive` on a corrupt archive (also when the same bytes were
+    imported earlier and recorded as corrupt), instead of ``imported_but_corrupt``.
+
+    ``protect_unity_tree``: raise :class:`TreeConflict`, before any pack/archive
+    is registered or any file copied, when extracting this archive would write
+    into a ``unity/`` / ``unity_previews/`` tree populated by another archive or
+    by unknown files. Re-importing the archive that owns the tree is allowed.
+    """
     path = Path(path).expanduser().resolve()
     if not path.is_file() or not path.name.lower().endswith(ARCHIVE_SUFFIXES):
         raise ValueError(f"not an archive (.zip/.unitypackage): {path}")
     log(f"hashing {path.name}")
     digest = archives.sha256_file(path, progress)
     existing = db.one("SELECT * FROM archives WHERE sha256=?", (digest,))
+    if require_valid:
+        ok, msg = archives.verify_archive(path, max_bytes=settings.max_extract_bytes, max_files=settings.max_extract_files)
+        if not ok:
+            raise InvalidArchive("archive failed verification")
+        if existing and (existing["verified"] != "ok" or archives.sha256_file(Path(existing["path"])) != digest):
+            raise ValueError("existing managed archive requires repair")
     if existing:
+        if protect_unity_tree and existing["pack_slug"]:
+            _guard_unity_tree(settings, db, existing["pack_slug"], existing["id"])
         return {"status": "already_imported", "archive": existing}
     if pack:
         row = packs.get_pack(db, pack)
@@ -64,17 +145,22 @@ def import_archive(
         slug, score = row["slug"], 999
     else:
         slug, score = packs.match_pack(db, path.name)
-        if not slug:
-            slug = packs.ensure_pack(db, path.name, source=f"archive:{path.name}")
-            score = 1 if slug else 0
-    ok, msg = archives.verify_archive(path) if verify else (True, "not verified")
+    if protect_unity_tree:
+        candidate = slug or (packs.inferred_pack(path.name) or {}).get("slug")
+        if candidate:
+            _guard_unity_tree(settings, db, candidate, None)
+    if not slug:
+        slug = packs.ensure_pack(db, path.name, source=f"archive:{path.name}")
+        score = 1 if slug else 0
+    if not require_valid:
+        ok, msg = archives.verify_archive(path) if verify else (True, "not verified")
     kind = packs.guess_kind(path.name)
     version = packs.guess_version(path.name)
     dest_dir = settings.archives_dir / (slug or "_unmatched")
     stored = dest_dir / safe_name(path.name, 200)
     if stored.exists() and archives.sha256_file(stored) != digest:
         stored = dest_dir / f"{digest[:12]}_{safe_name(path.name, 180)}"
-    mode = _link_or_copy(path, stored)
+    mode = _link_or_copy(path, stored, hardlink=not _staged_on_windows(settings, path, origin))
     archive_id = db.x(
         "INSERT INTO archives(sha256, filename, path, size, pack_slug, kind, version, origin, verified, imported_at)"
         " VALUES(?,?,?,?,?,?,?,?,?,?)",
@@ -118,6 +204,7 @@ def _register_tree(db: StateDB, slug: str, kind: str, path: Path, archive_id: in
     )
 
 
+@library_writer
 def extract_archive(settings: Settings, db: StateDB, archive_id: int, *, force: bool = False,
                     progress=None, log=print) -> dict:
     arc = db.one("SELECT * FROM archives WHERE id=?", (archive_id,))

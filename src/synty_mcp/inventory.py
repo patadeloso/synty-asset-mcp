@@ -22,6 +22,7 @@ from synty_inventory.discover import PackRef
 from . import unity
 from .config import Settings
 from .db import StateDB, dumps, loads, now
+from .write_lock import library_writer
 
 TREE_PRIORITY = ("unity", "source", "godot")
 
@@ -108,6 +109,7 @@ def write_glb_manifest(settings: Settings, pack_id: str) -> Path:
     return path
 
 
+@library_writer
 def scan_pack(settings: Settings, db: StateDB, slug: str, *, rebuild_index: bool = True, log=print) -> dict:
     pack = db.one("SELECT * FROM packs WHERE slug=?", (slug,))
     if pack is None:

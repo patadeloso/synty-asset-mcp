@@ -155,14 +155,8 @@ def get_pack(db: StateDB, ref: str) -> dict | None:
 LINES = {"POLYGON", "SIMPLE", "SIDEKICK", "ANIMATION", "INTERFACE"}
 
 
-def ensure_pack(db: StateDB, name: str, *, source: str) -> str | None:
-    """Register an owned pack discovered from a store download or an archive
-    name (``POLYGON_City_Unity_2022.zip`` -> ``polygon-city``), so the pack
-    list builds itself from what the owner actually has. Returns the slug, or
-    None when the name does not look like a Synty pack."""
-    slug, _score = match_pack(db, name)
-    if slug:
-        return slug
+def inferred_pack(name: str) -> dict | None:
+    """Preview the new pack a filename would register, without changing the library."""
     pack_id = pack_id_from_filename(name.replace(" - ", "_").replace(" ", "_"))
     if not pack_id:
         return None
@@ -174,9 +168,20 @@ def ensure_pack(db: StateDB, name: str, *, source: str) -> str | None:
     if line.split()[0] not in LINES or not rest:
         return None
     slug = "-".join([line.lower().replace(" ", "-")] + [r.lower() for r in rest])
-    seed = {"slug": slug, "line": line, "name": " ".join(rest), "pack_id": pack_id,
-            "match": sorted(meaningful(tokens(pack_id)) - {"polygon"}) or [rest[0].lower()],
-            "hints": [], "discovered_from": source}
+    return {"slug": slug, "line": line, "name": " ".join(rest), "pack_id": pack_id,
+            "match": sorted(meaningful(tokens(pack_id)) - {"polygon"}) or [rest[0].lower()], "hints": []}
+
+
+def ensure_pack(db: StateDB, name: str, *, source: str) -> str | None:
+    """Register a pack discovered from a store download or an archive filename."""
+    slug, _score = match_pack(db, name)
+    if slug:
+        return slug
+    seed = inferred_pack(name)
+    if not seed:
+        return None
+    seed["discovered_from"] = source
+    slug = seed["slug"]
     db.x("INSERT OR IGNORE INTO packs(slug, line, name, pack_id, pack_id_confirmed, content, seed) "
-         "VALUES(?,?,?,?,1,?,?)", (slug, line, seed["name"], pack_id, None, dumps(seed)))
+         "VALUES(?,?,?,?,1,?,?)", (slug, seed["line"], seed["name"], seed["pack_id"], None, dumps(seed)))
     return slug
