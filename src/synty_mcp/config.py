@@ -66,6 +66,11 @@ class Settings:
     max_extract_files: int = 400_000
 
     # Optional providers
+    unity_asset_store_enabled: bool = False
+    unity_asset_store_roots: list[Path] = field(default_factory=list)
+    unity_asset_store_show_unmatched: bool = False  # AI: owner opt-in for MCP inventory disclosure
+    unity_asset_store_max_package_bytes: int = 8 * 1024**3
+    unity_asset_store_max_scan_entries: int = 50_000
     syntydex_enabled: bool = False
     syntydex_export_file: Path | None = None
     store_enabled: bool = False
@@ -94,10 +99,25 @@ class Settings:
             setattr(self, key, Path(cur).expanduser().resolve() if cur else val)
         self.export_roots = [Path(p).expanduser().resolve() for p in self.export_roots]
         self.source_roots = [Path(p).expanduser().resolve() for p in self.source_roots]
+        for key in ("unity_asset_store_enabled", "unity_asset_store_show_unmatched"):
+            if not isinstance(getattr(self, key), bool):
+                raise ValueError(f"{key} must be a boolean")
+        for key in ("unity_asset_store_max_package_bytes", "unity_asset_store_max_scan_entries"):
+            value = getattr(self, key)
+            if type(value) is not int or value <= 0:
+                raise ValueError(f"{key} must be a positive integer")
+        self.unity_asset_store_roots = [
+            Path(p).expanduser().resolve() if self.unity_cache_supported else Path(p)
+            for p in self.unity_asset_store_roots
+        ]
         if self.owned_packs_file:
             self.owned_packs_file = Path(self.owned_packs_file).expanduser().resolve()
         if self.syntydex_export_file:
             self.syntydex_export_file = Path(self.syntydex_export_file).expanduser().resolve()
+
+    @property
+    def unity_cache_supported(self) -> bool:
+        return os.name != "nt"
 
     # Roots ---------------------------------------------------------------
     @property
@@ -182,6 +202,8 @@ class Settings:
             "public_base_url": self.public_base_url,
             "syntydex_enabled": self.syntydex_enabled,
             "store_enabled": self.store_enabled,
+            "unity_asset_store_enabled": self.unity_asset_store_enabled,
+            "unity_asset_store_root_count": len(self.unity_asset_store_roots),
             "allow_preview_images_to_agent": self.allow_preview_images_to_agent,
         }
 
@@ -214,8 +236,8 @@ def load_settings(config_file: str | Path | None = None, **overrides) -> Setting
     for k, v in file_cfg.items():
         if k.endswith(("_dir", "_db", "_file")) and isinstance(v, str) and not Path(v).expanduser().is_absolute():
             v = str((base / v).resolve())
-        if k in ("export_roots", "source_roots") and isinstance(v, list):
-            v = [str((base / x).resolve()) if not Path(x).expanduser().is_absolute() else x for x in v]
+        if k in ("export_roots", "source_roots", "unity_asset_store_roots") and isinstance(v, list):
+            v = [str(base / x) if not Path(x).expanduser().is_absolute() else x for x in v]
         cfg[k] = v
 
     probe = Settings(data_dir=cfg.get("data_dir") or overrides.get("data_dir") or "./data")
@@ -224,7 +246,7 @@ def load_settings(config_file: str | Path | None = None, **overrides) -> Setting
         if env is None:
             continue
         cur = cfg.get(fname, getattr(probe, fname))
-        if fname in ("export_roots", "source_roots", "tokens", "allowed_hosts"):
+        if fname in ("export_roots", "source_roots", "unity_asset_store_roots", "tokens", "allowed_hosts"):
             cur = []
         cfg[fname] = _coerce(fname, env, cur)
     cfg.update({k: v for k, v in overrides.items() if v is not None})

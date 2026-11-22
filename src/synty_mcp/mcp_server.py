@@ -76,6 +76,34 @@ def build_server(svc: Service) -> MCPServer:
         archives on disk, extracted trees and indexed asset counts."""
         return svc.list_owned_packs()
 
+    @tool(RO)
+    def get_unity_asset_store_status() -> dict:
+        """Show whether the local Unity cache provider is enabled and each configured root (by number) with its
+        state. Does not scan for packages: use scan_unity_asset_store."""
+        return svc.unity_asset_store_status()
+
+    @tool(RO)
+    def scan_unity_asset_store() -> dict:
+        """Preview local Unity package IDs and filename matches. Does not import or contact Unity."""
+        return svc.scan_unity_asset_store()
+
+    @tool(LOCAL_OVERWRITE)
+    def import_unity_asset_store_package(
+        ref: Annotated[str, Field(description="package ID from scan_unity_asset_store: exactly 64 lowercase hex "
+                                              "characters (file paths are not accepted)")],
+        wait: bool = False,
+        timeout: float = 1800,
+    ) -> dict:
+        """Import one discovered cache package by scan ID, verify it, and extract/index it if assigned to a pack.
+        Runs as a job: poll get_job(job_id), or pass wait=true. The outcome is in the job's result.status."""
+        return svc.import_unity_asset_store_package(ref, wait=wait, timeout=timeout)
+
+    @tool(LOCAL_OVERWRITE)
+    def sync_unity_asset_store(wait: bool = False, timeout: float = 1800) -> dict:
+        """Import, extract and index new cache packages matching known packs. Runs as a job: poll get_job(job_id),
+        or pass wait=true. The per-package outcomes are in the job's result."""
+        return svc.sync_unity_asset_store(wait=wait, timeout=timeout)
+
     @tool(NETWORK)
     def sync_owned_packs(wait: bool = True) -> dict:
         """Import archives dropped in the inbox folder and, if the Synty Store session is configured, list the

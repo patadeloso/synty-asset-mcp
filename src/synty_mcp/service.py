@@ -23,6 +23,7 @@ from .safepaths import PathViolation, confine, safe_name
 from .search import Searcher, asset_class
 from .store import SyntyStore
 from .syntydex import SyntyDexProvider
+from .unity_store import UnityStore
 
 LICENCE_NOTE = (
     "Synty Studios assets licensed to the library owner. Use only inside the owner's own products; "
@@ -48,6 +49,7 @@ class Service:
         self.converter = Converter(settings, self.db)
         self.jobs = JobManager(self.db, settings.workers)
         self.store = SyntyStore(settings, self.db)
+        self.unity_store = UnityStore(settings, self.db)
         self.dex = SyntyDexProvider(settings, self)
         self.serving_http = False  # set by http_app: enables relative /files URLs
 
@@ -271,7 +273,8 @@ class Service:
             "disk_bytes": {"archives": du(self.settings.archives_dir), "library": du(self.settings.library_dir),
                            "converted": du(self.settings.converted_dir)},
             "blender": self.settings.blender_executable(),
-            "providers": {"synty_store": self.store.status(), "syntydex": self.dex.status()},
+            "providers": {"synty_store": self.store.status(), "syntydex": self.dex.status(),
+                          "unity_asset_store": self.unity_store.status()},
             "config": self.settings.public_dict(),
         }
 
@@ -624,6 +627,49 @@ class Service:
             ]
         return res
 
+    # AI: Unity cache (agent side)
+    # AI: Agent-facing wrappers: no caller-supplied paths, privacy-filtered results (agent=True), and
+    # provider exceptions reduced to their type name so no local path, raw message or traceback can
+    # reach a tool response, a job record or a job log.
+    def unity_asset_store_status(self) -> dict:
+        """Root summary only; never walks the cache."""
+        try:
+            return self.unity_store.status()
+        except Exception as exc:  # noqa: BLE001 - sanitized
+            raise ServiceError(_unity_failure("status", exc)) from None
+
+    def scan_unity_asset_store(self) -> dict:
+        try:
+            return _json_safe(self.unity_store.scan(agent=True))
+        except Exception as exc:  # noqa: BLE001 - sanitized
+            raise ServiceError(_unity_failure("scan", exc)) from None
+
+    def import_unity_asset_store_package(self, ref: str, wait: bool = False, timeout: float = 1800) -> dict:
+        # AI: Checked before any job is submitted; the rejected value is not echoed back.
+        if not isinstance(ref, str) or not _UNITY_REF.fullmatch(ref):
+            raise ServiceError("ref must be a package ID from scan_unity_asset_store "
+                               "(exactly 64 lowercase hexadecimal characters)")
+
+        def work(_ctx):
+            # AI: Nothing may escape this callback: the job runner stores str(exc) and the traceback.
+            try:
+                return _json_safe(self.unity_store.import_package(ref, allow_path=False, allow_tree_update=False))
+            except Exception as exc:  # noqa: BLE001 - sanitized
+                return {"status": "failed", "error": _unity_failure("import", exc)}
+
+        job = self.jobs.submit("unity_cache_import", {"ref": ref}, work, dedupe_key=f"unity_cache_import:{ref}")
+        return self._wait(job, wait, timeout)
+
+    def sync_unity_asset_store(self, wait: bool = False, timeout: float = 1800) -> dict:
+        def work(_ctx):
+            try:
+                return _json_safe(self.unity_store.sync(agent=True))
+            except Exception as exc:  # noqa: BLE001 - sanitized
+                return {"status": "failed", "error": _unity_failure("sync", exc)}
+
+        job = self.jobs.submit("unity_cache_sync", {}, work, dedupe_key="unity_cache_sync")
+        return self._wait(job, wait, timeout)
+
     # ------------------------------------------------------------- syntydex
     def search_syntydex(self, query: str, limit: int = 20) -> dict:
         return self.dex.search(query, limit=limit)
@@ -640,6 +686,20 @@ class Service:
 
     def list_jobs(self, status: str | None = None, limit: int = 30) -> dict:
         return {"jobs": self.jobs.list(status, limit)}
+
+
+_UNITY_REF = re.compile(r"[0-9a-f]{64}")  # AI: used with fullmatch: no trailing newline, no upper case
+
+
+def _unity_failure(action: str, exc: BaseException) -> str:
+    """Fixed text plus the exception class name; never the message, which may hold local paths."""
+    return f"Unity cache {action} failed ({type(exc).__name__})"
+
+
+def _json_safe(result):
+    """Strict JSON round trip: a non-JSON value (e.g. a Path) raises here, inside the caller's
+    sanitizing try block, instead of being stringified into a response or failing in the job runner."""
+    return json.loads(json.dumps(result))
 
 
 def _version_key(variant: str) -> tuple:
