@@ -51,6 +51,31 @@ def test_mcp_in_process_tools(indexed_pack):
     asyncio.run(go())
 
 
+def test_unity_cache_tools(svc, tmp_path):
+    import fixtures
+    from mcp.client import Client
+
+    from synty_mcp.mcp_server import build_server
+
+    root = tmp_path / "private-cache-name"
+    fixtures.build_unitypackage(root / "POLYGON_FakeVillage.unitypackage")
+    svc.settings.unity_asset_store_enabled = True
+    svc.settings.unity_asset_store_roots = [root]
+
+    async def go():
+        async with Client(build_server(svc)) as c:
+            status = _payload(await c.call_tool("get_unity_asset_store_status", {}))
+            scan = _payload(await c.call_tool("scan_unity_asset_store", {}))
+            assert root.name not in str(scan) and status == scan
+            item, = scan["items"]
+            res = _payload(await c.call_tool("import_unity_asset_store_package", {"ref": item["id"]}))
+            assert res["status"] == "imported"
+            synced = _payload(await c.call_tool("sync_unity_asset_store", {}))
+            assert synced["items"][0]["status"] == "already_imported"
+
+    asyncio.run(go())
+
+
 def test_mcp_stdio_subprocess(tmp_path):
     """Spawn `python -m synty_mcp serve` and talk MCP over stdio, like Claude Code / Codex do."""
     from mcp.client.session import ClientSession
@@ -93,6 +118,16 @@ def test_http_requires_token(http):
     assert http.get("/api/status", headers={"Authorization": "Bearer wrong"}).status_code == 401
     ok = http.get("/api/status", headers={"Authorization": "Bearer secret-token"})
     assert ok.status_code == 200 and ok.json()["packs_owned"] == 12
+
+
+def test_http_unity_cache_status_hides_root_paths(http, svc, tmp_path):
+    root = tmp_path / "private-account-name" / "cache"
+    root.mkdir(parents=True)
+    svc.settings.unity_asset_store_enabled = True
+    svc.settings.unity_asset_store_roots = [root]
+    res = http.get("/api/status", headers={"Authorization": "Bearer secret-token"})
+    assert res.json()["providers"]["unity_asset_store"]["available"]
+    assert "private-account-name" not in res.text
 
 
 def test_http_cookie_login(http):
@@ -209,6 +244,10 @@ def test_preview_not_sent_inline_by_default(indexed_pack):
 
 # (readOnlyHint, destructiveHint, idempotentHint, openWorldHint) per tool, matching what each handler does.
 EXPECTED_HINTS = {
+    "get_unity_asset_store_status": (True, False, True, False),
+    "scan_unity_asset_store": (True, False, True, False),
+    "import_unity_asset_store_package": (False, True, True, False),
+    "sync_unity_asset_store": (False, True, True, False),
     "list_owned_packs": (True, False, True, False),
     "get_library_status": (True, False, True, False),
     "search_assets": (True, False, True, False),
@@ -246,7 +285,6 @@ def test_every_tool_has_all_four_explicit_hints(indexed_pack):
 
     tools = asyncio.run(go())
     assert {t.name for t in tools} == set(EXPECTED_HINTS)
-    assert len(tools) == 23
     for t in tools:
         ann = t.annotations
         assert ann is not None, t.name

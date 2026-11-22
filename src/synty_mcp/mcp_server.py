@@ -76,6 +76,26 @@ def build_server(svc: Service) -> MCPServer:
         archives on disk, extracted trees and indexed asset counts."""
         return svc.list_owned_packs()
 
+    @tool(RO)
+    def get_unity_asset_store_status() -> dict:
+        """Show configured local cache roots by number, availability, packages and prior cache imports."""
+        return svc.unity_store.scan()
+
+    @tool(RO)
+    def scan_unity_asset_store() -> dict:
+        """Preview local Unity package IDs and filename matches. Does not import or contact Unity."""
+        return svc.unity_store.scan()
+
+    @tool(LOCAL_OVERWRITE)
+    def import_unity_asset_store_package(ref: str) -> dict:
+        """Import one discovered cache package by scan ID, verify it, and extract/index it if assigned to a pack."""
+        return svc.unity_store.import_package(ref)
+
+    @tool(LOCAL_OVERWRITE)
+    def sync_unity_asset_store() -> dict:
+        """Import, extract and index new cache packages matching known packs. Reports unmatched files as skipped."""
+        return svc.unity_store.sync()
+
     @tool(NETWORK)
     def sync_owned_packs(wait: bool = True) -> dict:
         """Import archives dropped in the inbox folder and, if the Synty Store session is configured, list the

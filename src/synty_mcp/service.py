@@ -23,6 +23,7 @@ from .safepaths import PathViolation, confine, safe_name
 from .search import Searcher, asset_class
 from .store import SyntyStore
 from .syntydex import SyntyDexProvider
+from .unity_store import UnityStore
 
 LICENCE_NOTE = (
     "Synty Studios assets licensed to the library owner. Use only inside the owner's own products; "
@@ -48,6 +49,7 @@ class Service:
         self.converter = Converter(settings, self.db)
         self.jobs = JobManager(self.db, settings.workers)
         self.store = SyntyStore(settings, self.db)
+        self.unity_store = UnityStore(settings, self.db)
         self.dex = SyntyDexProvider(settings, self)
         self.serving_http = False  # set by http_app: enables relative /files URLs
 
@@ -271,7 +273,8 @@ class Service:
             "disk_bytes": {"archives": du(self.settings.archives_dir), "library": du(self.settings.library_dir),
                            "converted": du(self.settings.converted_dir)},
             "blender": self.settings.blender_executable(),
-            "providers": {"synty_store": self.store.status(), "syntydex": self.dex.status()},
+            "providers": {"synty_store": self.store.status(), "syntydex": self.dex.status(),
+                          "unity_asset_store": self.unity_store.status()},
             "config": self.settings.public_dict(),
         }
 

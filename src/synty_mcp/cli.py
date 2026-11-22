@@ -72,6 +72,28 @@ def cmd_import(args) -> int:
     return 0
 
 
+def cmd_unity_cache(args) -> int:
+    svc = _svc(args)
+    store = svc.unity_store
+    if args.action == "import":
+        try:
+            result = store.import_package(str(Path(args.ref).expanduser().absolute())
+                                          if Path(args.ref).suffix.lower() == ".unitypackage" else args.ref)
+        except ValueError as exc:
+            result = {"status": "failed", "error": str(exc)}
+        _print(result)
+        return int(result["status"] == "failed")
+    result = store.sync() if args.action == "sync" else store.scan()
+    # Paths are shown only to the owner at the CLI, not in MCP/HTTP responses.
+    for root, path in zip(result["roots"], svc.settings.unity_asset_store_roots, strict=True):
+        root["path"] = str(path)
+    _print(result)
+    if args.action == "status":
+        return 0
+    return int(not result["available"] or any(r["status"] != "ready" for r in result["roots"])
+               or any(i.get("status") == "failed" for i in result["items"]))
+
+
 def cmd_inbox(args) -> int:
     svc = _svc(args)
     _print(svc.sync_owned_packs())
@@ -151,6 +173,15 @@ def main(argv: list[str] | None = None) -> int:
     s.add_argument("--pack")
     s.add_argument("--no-extract", dest="extract", action="store_false")
     s.set_defaults(fn=cmd_import)
+
+    s = sub.add_parser("unity-cache", help="inspect or import downloaded local Unity packages")
+    actions = s.add_subparsers(dest="action", required=True)
+    for name, help_text in (("status", "show cache roots and discovered packages"),
+                            ("scan", "preview packages without importing"),
+                            ("sync", "import newly discovered files matching known packs")):
+        actions.add_parser(name, help=help_text)
+    actions.add_parser("import", help="import one discovered package").add_argument("ref", help="scan ID or cache file path")
+    s.set_defaults(fn=cmd_unity_cache)
 
     s = sub.add_parser("inbox", help="import the inbox folder (and list store purchases when configured)")
     s.set_defaults(fn=cmd_inbox)
