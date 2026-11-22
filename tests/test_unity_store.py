@@ -48,7 +48,7 @@ def test_unavailable_roots_and_confinement(cache, tmp_path):
     assert result["items"] == []
     assert [r["status"] for r in result["roots"]] == ["ready", "missing or not a directory", "overlaps managed storage"]
     with pytest.raises(ValueError, match="not discovered"):
-        svc.unity_store.import_package(str(hidden))
+        svc.unity_store.import_package(str(hidden), allow_path=True)
     svc.settings.unity_asset_store_enabled = False
     fixtures.build_unitypackage(root / "valid.unitypackage")
     assert not svc.unity_store.sync()["items"]
@@ -80,13 +80,13 @@ def test_sync_is_offline_idempotent_and_preserves_cache(cache, monkeypatch):
     assert (pkg.stat().st_mode, pkg.stat().st_mtime_ns) == (original.st_mode, original.st_mtime_ns)
 
     # Explicit selection may import an unmatched file. SHA deduplication remains authoritative.
-    assert svc.unity_store.import_package(str(other))["archive_id"] == arc["id"]
+    assert svc.unity_store.import_package(str(other), allow_path=True)["archive_id"] == arc["id"]
     assert {i["status"] for i in svc.unity_store.sync()["items"]} == {"already_imported"}
     ref = next(i["id"] for i in synced if i["filename"] == pkg.name)
     os.utime(pkg, ns=(original.st_atime_ns, original.st_mtime_ns + 10**9))
     with pytest.raises(ValueError, match="not discovered"):
         svc.unity_store.import_package(ref)
-    result = svc.unity_store.import_package(str(pkg))
+    result = svc.unity_store.import_package(str(pkg), allow_path=True)
     assert result["archive_id"] == arc["id"]
     assert len(svc.db.q("SELECT id FROM archives")) == 1
 
@@ -118,6 +118,10 @@ def test_failed_verification_does_not_mark_import_complete(cache):
     bad.write_bytes(b"incomplete download")
     outcome = svc.unity_store.sync()["items"][0]
     assert outcome["status"] == "failed" and "verification" in outcome["error"]
-    assert svc.unity_store.scan()["items"][0]["archive_id"] is None
+    item, = svc.unity_store.scan()["items"]
+    assert item["archive_id"] is None
+    assert not svc.db.q("SELECT * FROM archives") and not any(svc.settings.archives_dir.iterdir())
+    assert svc.unity_store.sync()["items"][0]["status"] == "failed_unchanged"
+    assert svc.unity_store.import_package(item["id"], retry=True)["status"] == "failed"
     fixtures.build_unitypackage(bad)
     assert svc.unity_store.sync()["items"][0]["status"] == "imported"

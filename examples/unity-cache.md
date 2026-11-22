@@ -1,14 +1,10 @@
-# Unity Asset Store: local cache ingestion
+# Import a downloaded Unity Asset Store package
 
-[Issue #1](https://github.com/patadeloso/synty-asset-mcp/issues/1). Use Unity to download purchased packages and
-synty-mcp to import them. There is no Unity downloader, browser automation, credential handling or network access.
+Download the package yourself in the Unity Editor (**Package Manager → My Assets**). The provider reads local files; it never logs in to Unity or contacts a store.
 
-## Try it
+## Preview, then import
 
-1. Sign in to Unity yourself and download a purchased Synty package using **Package Manager → My Assets**.
-2. Set the following in your local `config.yaml`. Replace the example folder with the package cache you actually
-   use. There is no assumed platform path. Do not select a Unity project, account/profile directory or managed
-   library directory. These roots are separate from `source_roots` (extracted trees) and are not served over HTTP.
+1. Add the following to your local `config.yaml`. Use the actual cache folder (or, better, just the publisher subfolder you want to import). Don't use a home directory, Unity project, managed data directory or configured source root.
 
    ```yaml
    unity_asset_store_enabled: true
@@ -16,7 +12,7 @@ synty-mcp to import them. There is no Unity downloader, browser automation, cred
      - /path/to/downloaded/packages
    ```
 
-3. Preview the cache. Both commands show live, metadata-only discovery; neither imports nor hashes package contents.
+2. Check that the root is available, then preview candidates. `status` does **not** enumerate packages. `scan` checks file metadata without hashing or importing contents.
 
    ```sh
    export SYNTY_MCP_CONFIG="$PWD/config.yaml"
@@ -24,33 +20,29 @@ synty-mcp to import them. There is no Unity downloader, browser automation, cred
    synty-mcp unity-cache scan
    ```
 
-4. Import one item using its scan ID (or its local file path). Alternatively, sync all files whose names match
-   **known packs**. The filename match is a suggestion, not proof of publisher or ownership: review the scan first.
+3. Select a package by its scan ID or cache file path. File paths are accepted **only at the CLI**. With no known packs, start here: the importer can infer a pack from a Synty-style filename. Unassignable files are archived, not extracted.
 
    ```sh
-   printf 'Paste the package ID from scan: '
+   printf 'Paste the ID from scan: '
    read -r package_id
    synty-mcp unity-cache import "$package_id"
-   # Or, to import all new matches:
-   synty-mcp unity-cache sync
    ```
 
-   Sync reports each file, including `skipped_unmatched`, `already_imported`, and failures. With an empty pack
-   registry, start with explicit import: the existing importer can infer a pack from a Synty-style filename.
-   A file that still cannot be assigned is archived but not extracted or indexed (`pack: null`).
+4. Alternatively, `synty-mcp unity-cache sync` imports only **unique exact filename-stem matches** to known pack IDs (case and separators normalized). A filename is not proof of publisher or ownership. Token matches, competing candidates and unrelated files are skipped; select one explicitly if appropriate.
 
-## Design decisions
+## Outcomes that need attention
 
-- Disabled by default. Only regular `.unitypackage` files are discovered (case-insensitive); discovery does not
-  descend through symlinks. Missing roots are reported separately so other roots can still be used.
-- Discovery is live rather than a database of potentially stale candidates. The scan ID fingerprints the normalized
-  path, size and modification time. A changed size or timestamp requires a new selection.
-- Only completed imports are recorded in local SQLite (`unity_store_imports`). A scan cannot identify identical
-  content previously imported by another route without hashing. Import-time SHA-256 deduplication is authoritative.
-- Cache files are staged one at a time in managed temporary storage **before** invoking the normal archive importer:
-  its hard-link/permission changes must never affect Unity's files. Allow temporary space for one package in addition
-  to managed archives and extracted trees. Verification, extraction and indexing reuse the existing library pipeline.
-- MCP: `get_unity_asset_store_status` and `scan_unity_asset_store` are read-only;
-  `import_unity_asset_store_package(ref)` and `sync_unity_asset_store` write to managed storage and may update
-  extracted assets and catalogs. All four are local-only. Cache paths stay local: tools identify roots by their
-  one-based configuration position and packages by scan ID and filename.
+| Outcome | What to do |
+|---|---|
+| `already_imported` | Nothing: this cache fingerprint or the archive content is already known. |
+| `requires_tree_confirmation` | Review the package and back up the managed pack tree. Only if you intend to merge it into that tree, run `synty-mcp unity-cache import "$package_id" --allow-tree-update`. Extraction can overwrite same-named assets; it does not remove obsolete files. Sync never confirms an update. |
+| `failed_unchanged` | Verification already failed for this path, size and mtime. Replace or finish downloading the file, then scan again. To explicitly recheck the same file, use `unity-cache import "$package_id" --retry`. |
+| `truncated: true` | Narrow the configured cache roots and rescan. Bulk sync won't import from a truncated scan. |
+
+Discovery is bounded (default 50,000 directory entries across all roots, maximum depth 32). Staging is limited to 8 GiB per file by default and checks available temporary space. Adjust `unity_asset_store_max_scan_entries` or `unity_asset_store_max_package_bytes` for a trusted cache if needed. Allow additional space for managed archives and extraction. Cache files are never used as the importer's hard-link source. SHA-256 deduplication remains authoritative, and a change in size or modification time gives a new selection ID.
+
+## MCP privacy and jobs
+
+`get_unity_asset_store_status` shows only numbered roots and their availability. `scan_unity_asset_store` shows exact matches; other filenames stay off the wire by default. To share them with connected agents, the **owner** must set `unity_asset_store_show_unmatched: true` locally. This also affects sync reports; a job result can retain filenames shared while opted in. The CLI always shows the full local scan. A scan ID is an opaque, locally keyed selection token; share one only when you want a client to select that package.
+
+`import_unity_asset_store_package(ref)` and `sync_unity_asset_store()` return jobs. Poll `get_job(job_id)` or pass `wait: true` and check `result` for per-file outcomes. Neither tool accepts a cache path or authorizes merging a different archive into an existing tree. Other library tools keep their existing behavior; these safeguards are specific to the Unity cache workflow.

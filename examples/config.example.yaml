@@ -35,6 +35,9 @@ max_extract_files: 400000
 
 # Optional providers (off by default; see docs/INTEGRATIONS.md)
 unity_asset_store_enabled: false
+unity_asset_store_show_unmatched: false  # owner opt-in: disclose other package names in MCP scan/sync results
+unity_asset_store_max_package_bytes: 8589934592  # 8 GiB per staged cache package
+unity_asset_store_max_scan_entries: 50000        # bound discovery across all roots
 unity_asset_store_roots: []      # folders containing downloaded .unitypackage files; no default location
 syntydex_enabled: false
 syntydex_export_file: null       # one asset name per line, optionally "Name<TAB>Pack"

@@ -51,27 +51,123 @@ def test_mcp_in_process_tools(indexed_pack):
     asyncio.run(go())
 
 
-def test_unity_cache_tools(svc, tmp_path):
+def test_unity_cache_tools(svc, tmp_path, monkeypatch):
+    import re
+
     import fixtures
+    from conftest import _register_fake_pack
     from mcp.client import Client
 
     from synty_mcp.mcp_server import build_server
 
     root = tmp_path / "private-cache-name"
     fixtures.build_unitypackage(root / "POLYGON_FakeVillage.unitypackage")
+    fixtures.build_unitypackage(root / "SecretOtherProduct.unitypackage")  # matches no owned pack
+    _register_fake_pack(svc)  # the exact pack the first file belongs to
     svc.settings.unity_asset_store_enabled = True
     svc.settings.unity_asset_store_roots = [root]
 
+    def matched(result):
+        item, = [i for i in result["items"] if i.get("pack") == "polygon-fakevillage"]
+        return item
+
+    def private(obj):
+        return root.name in str(obj) or str(tmp_path) in str(obj)
+
     async def go():
         async with Client(build_server(svc)) as c:
-            status = _payload(await c.call_tool("get_unity_asset_store_status", {}))
+            # Status is a root summary and must not walk the cache.
+            with monkeypatch.context() as m:
+                def no_scan(*_a, **_k):
+                    raise AssertionError("status must not scan")
+
+                m.setattr(svc.unity_store, "scan", no_scan)
+                m.setattr(svc.unity_store, "_discover", no_scan, raising=False)
+                status = _payload(await c.call_tool("get_unity_asset_store_status", {}))
+            assert status["available"] and "items" not in status
+            assert not private(status) and ".unitypackage" not in str(status)
+
+            # Agent scans are privacy-filtered: unmatched files stay hidden by default.
             scan = _payload(await c.call_tool("scan_unity_asset_store", {}))
-            assert root.name not in str(scan) and status == scan
-            item, = scan["items"]
-            res = _payload(await c.call_tool("import_unity_asset_store_package", {"ref": item["id"]}))
-            assert res["status"] == "imported"
-            synced = _payload(await c.call_tool("sync_unity_asset_store", {}))
-            assert synced["items"][0]["status"] == "already_imported"
+            assert not private(scan) and "SecretOtherProduct" not in str(scan)
+            item = matched(scan)
+            assert re.fullmatch(r"[0-9a-f]{64}", item["id"])
+
+            # Anything but an exact scan ID is refused before a job exists; paths are never accepted.
+            for bad in (str(root / "POLYGON_FakeVillage.unitypackage"), item["id"].upper(), item["id"][:-1],
+                        item["id"] + "\n", item["id"] + "0", ""):
+                res = await c.call_tool("import_unity_asset_store_package", {"ref": bad, "wait": True})
+                assert res.is_error and not private(res.content[0].text), bad
+            assert svc.jobs.list() == []
+
+            # Writes are jobs: not waited for by default, then read back with get_job.
+            job = _payload(await c.call_tool("import_unity_asset_store_package", {"ref": item["id"]}))
+            assert job["kind"] == "unity_cache_import" and job["status"] in ("queued", "running", "done")
+            assert job["params"] == {"ref": item["id"]}
+            svc.jobs.wait(job["job_id"], 120)
+            done = _payload(await c.call_tool("get_job", {"job_id": job["job_id"], "with_log": True}))
+            assert done["status"] == "done" and done["result"]["status"] == "imported", done
+            assert not private(done)
+
+            again = _payload(await c.call_tool("import_unity_asset_store_package",
+                                               {"ref": item["id"], "wait": True}))
+            assert again["status"] == "done" and again["result"]["status"] == "already_imported", again
+
+            queued = _payload(await c.call_tool("sync_unity_asset_store", {}))
+            assert queued["kind"] == "unity_cache_sync" and queued["params"] == {}
+            svc.jobs.wait(queued["job_id"], 120)
+            synced = _payload(await c.call_tool("sync_unity_asset_store", {"wait": True}))
+            assert synced["status"] == "done", synced
+            assert matched(synced["result"])["status"] == "already_imported"
+            assert not private(synced) and "SecretOtherProduct" not in str(synced)
+
+            # The owner may opt in to showing unmatched filenames; root paths stay hidden regardless.
+            svc.settings.unity_asset_store_show_unmatched = True
+            shown = _payload(await c.call_tool("scan_unity_asset_store", {}))
+            assert "SecretOtherProduct" in str(shown) and not private(shown)
+            synced = _payload(await c.call_tool("sync_unity_asset_store", {"wait": True}))
+            assert synced["status"] == "done" and "SecretOtherProduct" in str(synced) and not private(synced)
+
+    asyncio.run(go())
+
+
+def test_unity_cache_errors_never_leak(svc, tmp_path, monkeypatch):
+    """Provider exceptions are reduced to a class name in tool errors, job records and job logs."""
+    from mcp.client import Client
+
+    from synty_mcp.mcp_server import build_server
+
+    secret = str(tmp_path / "private-account-name" / "cache.unitypackage")
+    calls = []
+
+    def boom(*args, **kwargs):
+        calls.append((args, kwargs))
+        raise OSError(f"cannot read {secret}")
+
+    for name in ("status", "scan", "sync", "import_package"):
+        monkeypatch.setattr(svc.unity_store, name, boom)
+    ref = "a" * 64
+
+    async def go():
+        async with Client(build_server(svc)) as c:
+            for name in ("get_unity_asset_store_status", "scan_unity_asset_store"):
+                res = await c.call_tool(name, {})
+                assert res.is_error and "OSError" in res.content[0].text
+                assert "private-account-name" not in res.content[0].text
+            assert calls[-1] == ((), {"agent": True})
+
+            for name, args in (("import_unity_asset_store_package", {"ref": ref, "wait": True}),
+                               ("sync_unity_asset_store", {"wait": True})):
+                job = _payload(await c.call_tool(name, args))
+                assert job["status"] == "done" and job["result"]["status"] == "failed", job
+                assert "OSError" in job["result"]["error"]
+                logged = _payload(await c.call_tool("get_job", {"job_id": job["job_id"], "with_log": True}))
+                listed = _payload(await c.call_tool("list_jobs", {}))
+                for seen in (job, logged, listed):
+                    assert "private-account-name" not in str(seen) and "Traceback" not in str(seen)
+            # Agents can neither pass a path nor confirm a tree update, and never set retry.
+            assert calls[-2] == ((ref,), {"allow_path": False, "allow_tree_update": False})
+            assert calls[-1] == ((), {"agent": True})
 
     asyncio.run(go())
 

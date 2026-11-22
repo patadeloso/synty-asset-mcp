@@ -48,6 +48,7 @@ The MCP should never read, export, or expose Unity credentials, cookies, account
 3. **Database state**
    - Track completed imports in SQLite using source path, size, mtime and archive ID. Discover candidates live so removed files do not remain eligible.
    - Preserve source paths locally; do not expose them over HTTP.
+   - Keep a private ID key in managed secrets storage. Remember failed verification fingerprints until the file changes or the owner explicitly retries.
    - A changed size/mtime makes an entry eligible for review/re-import. Existing archive SHA-256 deduplication remains authoritative.
 
 4. **Reuse existing import code**
@@ -59,7 +60,9 @@ The MCP should never read, export, or expose Unity credentials, cookies, account
    - Add provider status to `Service.get_library_status()` beside `synty_store` and `syntydex`.
    - CLI: `unity-cache status`, `scan`, `import <id-or-path>`, `sync`.
    - MCP: `get_unity_asset_store_status()` and `scan_unity_asset_store()` are read-only; `import_unity_asset_store_package(ref)` and `sync_unity_asset_store()` write to managed storage. All four are idempotent and not open-world.
-   - Provide dry-run/selection before bulk import. Sync reports imports, already-imported packages, unmatched skips, and failures individually.
+   - Bulk sync accepts only unambiguous exact pack-ID matches and never authorizes merging a new archive into a populated pack tree. Explicit owner confirmation for updates is local CLI only.
+   - Status does not enumerate cache entries. Agent scan/sync omit non-exact matches unless the owner opts in, and agent imports accept keyed IDs only. MCP writes use the existing job manager.
+   - Bound scan work and staged bytes; coordinate library writes across server and CLI. See the walkthrough for limits, flags and outcomes.
 
 6. **Tests**
    - Use temp directories containing synthetic `.unitypackage` fixture files.

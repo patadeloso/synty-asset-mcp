@@ -68,6 +68,9 @@ class Settings:
     # Optional providers
     unity_asset_store_enabled: bool = False
     unity_asset_store_roots: list[Path] = field(default_factory=list)
+    unity_asset_store_show_unmatched: bool = False  # owner opt-in for MCP inventory disclosure
+    unity_asset_store_max_package_bytes: int = 8 * 1024**3
+    unity_asset_store_max_scan_entries: int = 50_000
     syntydex_enabled: bool = False
     syntydex_export_file: Path | None = None
     store_enabled: bool = False
@@ -96,6 +99,13 @@ class Settings:
             setattr(self, key, Path(cur).expanduser().resolve() if cur else val)
         self.export_roots = [Path(p).expanduser().resolve() for p in self.export_roots]
         self.source_roots = [Path(p).expanduser().resolve() for p in self.source_roots]
+        for key in ("unity_asset_store_enabled", "unity_asset_store_show_unmatched"):
+            if not isinstance(getattr(self, key), bool):
+                raise ValueError(f"{key} must be a boolean")
+        for key in ("unity_asset_store_max_package_bytes", "unity_asset_store_max_scan_entries"):
+            value = getattr(self, key)
+            if type(value) is not int or value <= 0:
+                raise ValueError(f"{key} must be a positive integer")
         self.unity_asset_store_roots = [Path(p).expanduser().resolve() for p in self.unity_asset_store_roots]
         if self.owned_packs_file:
             self.owned_packs_file = Path(self.owned_packs_file).expanduser().resolve()
