@@ -50,9 +50,8 @@ by Blender at test time. The repository contains no Synty files.
 
 - **Shaders, particle systems, Unity components, LOD groups and composite prefabs** (several nested meshes or
   prefabs inside prefabs) are not rebuilt: conversion exports the prefab's main mesh. Materials become glTF PBR with
-  the albedo texture (roughness 0.8, non-metallic).
-- Per-mesh MaterialList bindings preserve explicitly flat and unresolved declared slots. Otherwise textures are assigned in this order: material name → prefab/MaterialList slot order → path embedded in the FBX →
-  pack atlas. Normal and emissive maps are not wired.
+  an approximate glTF PBR material. Supported Unity base colour, alpha, metallic, smoothness and emission colour are translated; other shader-specific features are omitted.
+- Per-mesh MaterialList bindings preserve explicitly flat and unresolved declared slots. Unity GUIDs and exact declared texture names take precedence; custom-shader hints can resolve an exact material name. Embedded paths can be relinked by unique name. No arbitrary atlas is assigned. Distinct duplicate exact texture names are reported as ambiguous; normal and emissive maps are not wired. Rescan packs to rebuild texture bindings and force conversion to refresh cached GLBs after changing discovery logic.
 - When animations are present, armature transforms are **not** baked (to keep the keys valid): those GLBs may have
   a root node at 0.01 scale. They display correctly in three.js, but synty-inventory's static measurement may be 100×
   too small; in that case use the Blender measurement in the conversion report.
@@ -67,6 +66,10 @@ by Blender at test time. The repository contains no Synty files.
 - During development a render of one real Synty asset was opened **once** to check texture assignment, so that
   image passed through the AI model writing the code. From then on previews were verified numerically only
   (dimensions, pixel coverage), without viewing them.
+
+## Material fallback follow-up
+
+With Blender 5.2.3, the automated suite passed with one live test skipped. Synthetic GLB checks verify the embedded atlas, base-colour factor, metallic, roughness, emission and cutout. Separate read-only checks converted the locally available Mech ArcRifle, Cyber City Laser Gun and Sci-Fi Horror Mining Laser: Mech bound its atlas, Cyber City's declared albedo was absent, and Sci-Fi Horror bound its atlas and screen image via exact material names. Custom shaders and unconverted maps remain approximations.
 
 ## Follow-up verification (2026-10-13)
 

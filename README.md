@@ -176,7 +176,7 @@ Every tool declares all four MCP behaviour hints explicitly (worst case over its
 | `original_quality` | archival | no reduction |
 
 Overridable options: `max_texture`, `image_format`, `draco`, `decimate`, `animations`, `scale`,
-`auto_unit_fix`, `bake_transforms`. Unity shaders, particle systems and components are **not** converted.
+`auto_unit_fix`, `bake_transforms`. Unity shaders are approximated rather than converted; particle systems and components are not converted.
 
 ### Content and material diagnostics
 
@@ -186,17 +186,27 @@ Without an available inspected export, skin/clip facts are `null`, not guessed f
 An exported skinned character can have zero clips. If `animations_exported` is false, an empty list does not
 prove the original source had no animations. An uninspected or unavailable asset is not proof of absence.
 
-Conversion reports retain per-mesh material bindings and use four states:
+Conversion reports retain per-mesh material bindings and use five states:
 
-- `resolved`: a texture file was assigned; `how` records whether it was selected by material, slot, embedded path or atlas fallback.
-- `untextured`: source metadata explicitly says no texture; atlas fallback is suppressed.
-- `missing`: a declared texture could not be resolved; atlas fallback is suppressed and a warning is returned.
-- `unknown`: no texture binding or explicit intent could be verified; the report preserves that uncertainty.
+- `resolved`: a texture file was assigned; `how` and `resolution_method` describe its selection.
+- `untextured`: source metadata explicitly says no texture.
+- `missing`: a declared texture could not be resolved; a warning is returned.
+- `ambiguous`: multiple distinct files match the declared name; none is chosen.
+- `unknown`: no texture binding or explicit intent could be verified.
+
+Unity GUID references take precedence; MaterialList entries use exact texture names, or exact material names for a
+custom-shader hint. Byte-identical copies are treated as one candidate; distinct same-name images are ambiguous.
+Imported material image paths can be relinked by a unique filename match. No arbitrary pack atlas is assigned.
+Reports include expected names, candidate basenames, search-directory basenames and shader-approximation warnings;
+existing dependency fields can also contain local file paths. Unity base colour, metallic, smoothness (converted to
+roughness), emission colour and alpha mode/cutoff are approximated when present. Custom shader logic, normal,
+emission and metallic texture maps, and other shader-specific features are not reconstructed or baked.
 
 `get_asset_dependencies.material_resolution` exposes the declared slot states, expected texture names and
 per-mesh mappings. After updating the importer, rescan affected packs with `scan_library`; existing resolved
 metadata is not rewritten automatically. Conversions are versioned so cached output from the previous importer
-is regenerated when requested.
+is regenerated when requested. Use `convert_asset_to_glb(..., force=true)` to regenerate an existing output
+explicitly, especially after changing texture file contents without changing their paths.
 
 Conversion results and collection entries include `content` and `provenance` identifying the source asset,
 file format and source fingerprint (size/mtime identity, not a cryptographic hash). Keep each animation

@@ -119,14 +119,18 @@ def keep_node(node):
 def _find_by_basename(name, dirs):
     base = os.path.basename(name.replace("\\", "/"))
     stem = os.path.splitext(base)[0].lower()
+    matches = set()
     for d in dirs:
         try:
             for f in os.listdir(d):
-                if f.lower() == base.lower() or os.path.splitext(f)[0].lower() == stem:
-                    return os.path.join(d, f)
+                ext = os.path.splitext(f)[1].lower()
+                if ext in (".png", ".tga", ".jpg", ".jpeg", ".psd", ".tif", ".tiff", ".exr") and (
+                    f.lower() == base.lower() or os.path.splitext(f)[0].lower() == stem
+                ):
+                    matches.add(os.path.join(d, f))
         except OSError:
             continue
-    return None
+    return next(iter(matches)) if len(matches) == 1 else None
 
 
 def _image(path, cache):
@@ -140,9 +144,11 @@ def _image(path, cache):
 def _base_color_image(mat):
     if not mat.use_nodes:
         return None
-    for n in mat.node_tree.nodes:
-        if n.type == "TEX_IMAGE" and n.image is not None:
-            return n
+    bsdf = next((n for n in mat.node_tree.nodes if n.type == "BSDF_PRINCIPLED"), None)
+    if bsdf:
+        for link in bsdf.inputs["Base Color"].links:
+            if link.from_node.type == "TEX_IMAGE" and link.from_node.image is not None:
+                return link.from_node
     return None
 
 
@@ -154,16 +160,79 @@ def _wire(mat, img):
         out = next((n for n in nt.nodes if n.type == "OUTPUT_MATERIAL"), None) or nt.nodes.new("ShaderNodeOutputMaterial")
         bsdf = nt.nodes.new("ShaderNodeBsdfPrincipled")
         nt.links.new(bsdf.outputs["BSDF"], out.inputs["Surface"])
-    tex = next((n for n in nt.nodes if n.type == "TEX_IMAGE"), None) or nt.nodes.new("ShaderNodeTexImage")
+    tex = _base_color_image(mat) or nt.nodes.new("ShaderNodeTexImage")
     tex.image = img
     for link in list(bsdf.inputs["Base Color"].links):
         nt.links.remove(link)
     nt.links.new(tex.outputs["Color"], bsdf.inputs["Base Color"])
-    # Synty materials are matte; FBX imports often come in glossy.
-    if "Roughness" in bsdf.inputs:
-        bsdf.inputs["Roughness"].default_value = max(bsdf.inputs["Roughness"].default_value, 0.8)
-    if "Metallic" in bsdf.inputs:
-        bsdf.inputs["Metallic"].default_value = 0.0
+
+
+def _apply_unity_pbr(mat, props, textured):
+    mat.use_nodes = True
+    nodes, links = mat.node_tree.nodes, mat.node_tree.links
+    bsdf = next((n for n in nodes if n.type == "BSDF_PRINCIPLED"), None)
+    if bsdf is None:
+        bsdf = nodes.new("ShaderNodeBsdfPrincipled")
+        out = next((n for n in nodes if n.type == "OUTPUT_MATERIAL"), None) or nodes.new("ShaderNodeOutputMaterial")
+        links.new(bsdf.outputs["BSDF"], out.inputs["Surface"])
+    image = _base_color_image(mat) if textured else None
+    color = props.get("base_color")
+    if color:
+        if textured and bsdf.inputs["Base Color"].is_linked:
+            source = bsdf.inputs["Base Color"].links[0].from_socket
+            mix = nodes.new("ShaderNodeMix")
+            mix.data_type = "RGBA"
+            mix.blend_type = "MULTIPLY"
+            mix.inputs[0].default_value = 1
+            mix.inputs[7].default_value = color
+            links.new(source, mix.inputs[6])
+            links.new(mix.outputs[2], bsdf.inputs["Base Color"])
+        else:
+            bsdf.inputs["Base Color"].default_value = color
+    for key, socket in (("metallic", "Metallic"), ("roughness", "Roughness")):
+        if key in props:
+            bsdf.inputs[socket].default_value = props[key]
+    if "emission" in props:
+        socket = bsdf.inputs.get("Emission Color") or bsdf.inputs.get("Emission")
+        if socket:
+            socket.default_value = [*props["emission"], 1.0]
+        strength = bsdf.inputs.get("Emission Strength")
+        if strength:
+            strength.default_value = 1.0
+    mode = props.get("alpha_mode", "OPAQUE")
+    if mode != "OPAQUE":
+        alpha = color[3] if color else 1.0
+        bsdf.inputs["Alpha"].default_value = alpha
+        if image:
+            if alpha != 1.0:
+                multiply = nodes.new("ShaderNodeMath")
+                multiply.operation = "MULTIPLY"
+                multiply.inputs[1].default_value = alpha
+                links.new(image.outputs["Alpha"], multiply.inputs[0])
+                links.new(multiply.outputs[0], bsdf.inputs["Alpha"])
+            else:
+                links.new(image.outputs["Alpha"], bsdf.inputs["Alpha"])
+        if mode == "MASK":
+            alpha_input = bsdf.inputs["Alpha"]
+            if alpha_input.is_linked:
+                source = alpha_input.links[0].from_socket
+            else:
+                value = nodes.new("ShaderNodeValue")
+                value.outputs[0].default_value = alpha
+                source = value.outputs[0]
+            less = nodes.new("ShaderNodeMath")
+            less.operation = "LESS_THAN"
+            less.inputs[1].default_value = props.get("alpha_cutoff", 0.5)
+            invert = nodes.new("ShaderNodeMath")
+            invert.operation = "SUBTRACT"
+            invert.inputs[0].default_value = 1.0
+            links.new(source, less.inputs[0])
+            links.new(less.outputs[0], invert.inputs[1])
+            links.new(invert.outputs[0], alpha_input)
+        if hasattr(mat, "blend_method"):
+            mat.blend_method = "CLIP" if mode == "MASK" else "BLEND"
+        if mode == "MASK" and hasattr(mat, "alpha_threshold"):
+            mat.alpha_threshold = props.get("alpha_cutoff", 0.5)
 
 
 def assign_textures(tex):
@@ -179,14 +248,21 @@ def assign_textures(tex):
         slots = bindings.get("slots") or []
         states = bindings.get("slot_states") or []
         expected = bindings.get("expected_textures") or []
+        candidates = bindings.get("candidates") or []
+        methods = bindings.get("resolution_methods") or []
+        custom_shaders = bindings.get("custom_shaders") or []
+        unsupported_maps = bindings.get("unsupported_maps") or []
         by_mat = bindings.get("by_material") or {}
         mat_states = bindings.get("material_states") or {}
-        fallback = tex.get("fallback")
+        unity_materials = bindings.get("unity_materials") or ([] if bindings is not tex else tex.get("unity_materials") or [])
         for i, slot in enumerate(ob.material_slots):
             mat = slot.material
             if mat is None:
                 mat = bpy.data.materials.new(f"{ob.name}_mat_{i}")
                 slot.material = mat
+            material_info = unity_materials[i] if i < len(unity_materials) else None
+            if material_info is None:
+                material_info = next((m for m in unity_materials if m.get("material") == mat.name), None)
             chosen, how, state = None, None, None
             key = next((k for k in by_mat if k == mat.name), None)
             if key is None:
@@ -196,9 +272,9 @@ def assign_textures(tex):
                 state_key = next((k for k in mat_states if norm(k) == norm(mat.name)), None)
             if key is not None:
                 chosen, how = by_mat[key], "material_name"
-            elif state_key is not None and mat_states[state_key] in ("untextured", "missing"):
+            elif state_key is not None and mat_states[state_key] in ("untextured", "missing", "ambiguous"):
                 state = mat_states[state_key]
-            elif i < len(states) and states[i] in ("untextured", "missing"):
+            elif i < len(states) and states[i] in ("untextured", "missing", "ambiguous"):
                 state = states[i]
             elif i < len(slots) and slots[i]:
                 chosen, how = slots[i], "slot_order"
@@ -214,10 +290,13 @@ def assign_textures(tex):
                             chosen, how = found, "relinked_by_name"
                 if chosen is None and len(slots) == 1 and slots[0]:
                     chosen, how = slots[0], "single_slot"
-                if chosen is None and fallback:
-                    chosen, how = fallback, "pack_atlas_fallback"
-            state = "resolved" if chosen and os.path.isfile(chosen) else state or "unknown"
-            binding = (chosen, state)
+            state = "resolved" if chosen and os.path.isfile(chosen) else "missing" if chosen else state or "unknown"
+            resolution = ("unity_guid" if material_info and chosen and chosen == material_info.get("texture") else
+                          methods[i] if i < len(methods) and chosen else how or state)
+            shader_note = (material_info.get("shader_approximation") if material_info else
+                           "Custom shader approximated using imported material" if i < len(custom_shaders)
+                           and custom_shaders[i] else None)
+            binding = (chosen, state, json.dumps(material_info, sort_keys=True))
             if mat.name in done and done[mat.name] != binding:
                 # A shared source material can have different per-mesh bindings.
                 # Copy it inside the export rather than rewiring an earlier mesh.
@@ -226,16 +305,24 @@ def assign_textures(tex):
             if mat.name not in done:
                 if state == "resolved":
                     _wire(mat, _image(chosen, cache))
-                elif state in ("untextured", "missing") and mat.use_nodes:
+                elif state in ("untextured", "missing", "ambiguous") and mat.use_nodes:
                     for node in mat.node_tree.nodes:
                         if node.type == "BSDF_PRINCIPLED":
                             for link in list(node.inputs["Base Color"].links):
                                 mat.node_tree.links.remove(link)
+                if material_info:
+                    _apply_unity_pbr(mat, material_info.get("properties") or {}, state == "resolved")
                 done[mat.name] = binding
             report.append({"mesh": ob.name, "slot": i, "material": mat.name,
                            "texture": os.path.basename(chosen) if state == "resolved" else None,
-                           "state": state, "how": how or state,
-                           "expected_texture": expected[i] if i < len(expected) else None})
+                           "state": state, "how": how or state, "resolution_method": resolution,
+                           "expected_texture": expected[i] if i < len(expected) else None,
+                           "candidates": candidates[i] if i < len(candidates) else [],
+                           "search_locations": [os.path.basename(d) for d in dirs],
+                           "properties": material_info.get("properties") if material_info else None,
+                           "unsupported_maps": (material_info.get("unsupported_maps", []) if material_info else
+                                                unsupported_maps[i] if i < len(unsupported_maps) else []),
+                           "shader_approximation": shader_note})
     return report
 
 
@@ -380,6 +467,12 @@ def run_convert(job):
     if not any(o.type == "MESH" for o in bpy.context.scene.objects) and not bpy.data.actions:
         raise RuntimeError("model contains no mesh and no animation")
     report["textures"] = assign_textures(job.get("textures") or {})
+    if any(t.get("unsupported_maps") for t in report["textures"]):
+        report["warnings"].append("some declared shader texture maps are not translated; inspect material diagnostics")
+    if any(t.get("shader_approximation") for t in report["textures"]):
+        report["warnings"].append("Unity shaders approximated as PBR; custom shader features and texture maps may be omitted")
+    if any(t["state"] == "ambiguous" for t in report["textures"]):
+        report["warnings"].append("some declared textures are ambiguous (exported with flat colour); inspect material diagnostics")
     if any(t["state"] == "missing" for t in report["textures"]):
         report["warnings"].append("some declared textures are missing (exported with flat colour); inspect material diagnostics")
     if any(t["state"] == "unknown" for t in report["textures"]):
