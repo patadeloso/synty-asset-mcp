@@ -169,7 +169,7 @@ def test_material_list_expanded_albedo_format(tmp_path):
                   "        Slot: Window\n            Albedo: Window_01.png (_Albedo_Map)\n"
                   "        Slot: Glass\n            No textures assigned\n")
     assert unity.parse_material_list(ml)["SM_House"] == [
-        {"material": "Walls", "texture": "PolygonTown_01_A"},
+        {"material": "Walls", "texture": "PolygonTown_01_A", "unsupported_maps": ["normal"]},
         {"material": "Window", "texture": "Window_01"},
         {"material": "Glass", "texture": "", "untextured": True},
     ]

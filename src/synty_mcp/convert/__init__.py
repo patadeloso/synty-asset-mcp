@@ -18,7 +18,7 @@ from ..diagnostics import export_content
 from ..glbinfo import glb_info
 from ..safepaths import safe_name
 
-CONVERTER_VERSION = 6
+CONVERTER_VERSION = 7
 JOB_SCRIPT = Path(__file__).with_name("blender_job.py")
 
 PRESETS: dict[str, dict] = {

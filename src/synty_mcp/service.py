@@ -488,7 +488,8 @@ class Service:
             "materials": tex.get("by_material") or {},
             "textures_by_slot": tex.get("slots") or [],
             "fallback_atlas": tex.get("fallback"),
-            "material_resolution": {k: tex.get(k) for k in ("slot_states", "material_states", "expected_textures", "by_mesh")},
+            "material_resolution": {k: tex.get(k) for k in ("slot_states", "material_states", "expected_textures",
+                                                               "candidates", "resolution_methods", "custom_shaders", "by_mesh")},
             "embedded_in_glb": "textures are embedded in converted GLBs; no external files needed",
         }
         module = a.get("module") or {}

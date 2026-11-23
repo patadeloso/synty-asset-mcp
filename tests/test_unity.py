@@ -44,6 +44,21 @@ def test_prefab_model_picks_the_active_character(tmp_path: Path):
     assert [p.stem for p in unity.prefab_material_paths(prefab, guids)] == [MAT_B]
 
 
+def test_prefab_preserves_material_slots_per_mesh_and_unresolved_guid(tmp_path: Path):
+    model = tmp_path / "bundle.fbx"
+    model.touch()
+    (tmp_path / "bundle.fbx.meta").write_text(
+        "fileIDToRecycleName:\n    4300010: First\n    4300020: Second\n"
+    )
+    mat = tmp_path / "A.mat"
+    mat.touch()
+    prefab = tmp_path / "test.prefab"
+    prefab.write_text(_character(100, 200, "First", 1, 4300010, MAT_A) +
+                      _character(101, 201, "Second", 1, 4300020, MAT_B))
+    found = unity.prefab_mesh_material_paths(prefab, {MODEL_GUID: model, MAT_A: mat})
+    assert found == {"First": [mat], "Second": [None]}
+
+
 def test_plausible_min_keeps_tiny_items_tiny():
     assert plausible_min_m("prop", "SM_Prop_Barrel_01") == 0.02
     assert plausible_min_m("prop", "SM_Prop_Coin_01") < 0.01
